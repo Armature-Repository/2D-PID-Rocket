@@ -20,15 +20,20 @@ class Engine:
         self.max_gimbal_angle = 15
         self.kp = 3.0
         self.kd = 1.5
+        self.error = 0
 
     def update(self, dt):
         self.gimbal_angle += self.gimbal_omega * dt
         self.gimbal_angle = max(-self.max_gimbal_angle, min(self.max_gimbal_angle, self.gimbal_angle))
 
-    def compute(self, body_angle, omega):
-        error = body_angle
-        correction = self.kp * error + self.kd * (omega)
+    def compute(self, body_angle, omega, vx):
+        angle_error = body_angle
+        vx_error = vx * 0.12
+        
+        error = angle_error + vx_error
+        correction = self.kp * error + self.kd * omega
         self.gimbal_omega = max(-self.max_gimbal_omega, min(self.max_gimbal_omega, correction))
+        
 
     def gimbal_point(self, rocket_x, rocket_y, rocket_angle):
         a = math.radians(rocket_angle)
@@ -50,6 +55,8 @@ class Engine:
 
     def draw(self):
         color = (255, 165, 0) if rocket.thrusting else (255, 0, 0)
+        if abs(self.error) > 0.2:
+             color = (255, 255, 0)  
         pg.draw.polygon(screen, color, self.corners(rocket.x, rocket.y, rocket.body_angle))
 
 
@@ -88,7 +95,7 @@ class Rocket:
 
         if self.thrusting:
             if self.auto:
-                self.engine.compute(self.body_angle, self.omega)
+                self.engine.compute(self.body_angle, self.omega, self.vx)
             effective_thrust = self.thrust * math.cos(math.radians(self.engine.gimbal_angle))
             Fx = effective_thrust * math.sin(math.radians(self.body_angle))
             Fy = -effective_thrust * math.cos(math.radians(self.body_angle))
