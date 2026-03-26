@@ -8,16 +8,15 @@ g_width, g_height = 10, 25
 
 screen = pg.display.set_mode((WIDTH, HEIGHT))
 
-g = 9.81
-damping_constant = 10
+g = 200
+damping_constant = 50
 mass = 1
-dt = 0.01
 
 class Engine:
     def __init__(self):
         self.gimbal_angle = 0
         self.gimbal_omega = 0
-        self.max_gimbal_omega = 4
+        self.max_gimbal_omega = 40
         self.max_gimbal_angle = 15
         self.kp = 0.1
         self.ki = 0.01
@@ -55,7 +54,11 @@ class Engine:
         ]
 
     def draw(self):
-        pg.draw.polygon(screen, (255, 0, 0), self.corners(rocket.x, rocket.y, rocket.body_angle))
+        if rocket.thrusting:
+            color = (255, 180, 0)
+        else:
+            color = (255, 0, 0)
+        pg.draw.polygon(screen, color, self.corners(rocket.x, rocket.y, rocket.body_angle))
 
 class Rocket:
     def __init__(self, x, y):
@@ -67,7 +70,7 @@ class Rocket:
         self.ay = 0
         self.alpha = 0
         self.omega = 0
-        self.thrust = 15
+        self.thrust = 300
         self.thrusting = False
         self.body_angle = 0
         self.speed = 0
@@ -130,9 +133,12 @@ class Rocket:
         self.engine.draw()
 
 rocket = Rocket(WIDTH//2 - width//2, 100)
+clock = pg.time.Clock()
 
 running = True
+
 while running:
+    dt = clock.tick(60) / 1000.0
     for event in pg.event.get():
         if event.type == pg.QUIT:
             running = False
@@ -161,4 +167,3 @@ while running:
     rocket.draw()
     pg.display.flip()
 pg.quit()
-
