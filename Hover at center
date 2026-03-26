@@ -1,0 +1,174 @@
+import pygame as pg
+import math
+
+pg.init()
+WIDTH, HEIGHT = 1500, 900
+width, height = 20, 50
+g_width, g_height = 10, 25
+
+screen = pg.display.set_mode((WIDTH, HEIGHT))
+
+g = 200
+damping_constant = 50
+mass = 1
+
+class Engine:
+    def __init__(self):
+        self.gimbal_angle = 0
+        self.gimbal_omega = 0
+        self.max_gimbal_omega = 40
+        self.max_gimbal_angle = 15
+        self.kp = 3.0
+        self.kd = 1.5
+        self.error = 0
+
+    def update(self, dt):
+        self.gimbal_angle += self.gimbal_omega * dt
+        self.gimbal_angle = max(-self.max_gimbal_angle, min(self.max_gimbal_angle, self.gimbal_angle))
+
+    def compute(self, body_angle, omega, vx, vy, xtarget=WIDTH // 2, ytarget=HEIGHT // 2 - height // 2):
+        x_error = (rocket.x - xtarget) * 0.01
+        vx_error = vx * 0.05
+        desired_lean = x_error + vx_error
+        angle_error = body_angle + desired_lean
+
+        correction = self.kp * angle_error + self.kd * omega
+        self.gimbal_omega = max(-self.max_gimbal_omega, min(self.max_gimbal_omega, correction))
+
+        y_error = (rocket.y - ytarget) * 0.01
+        vy_error = vy * 0.05
+        thrust_output = max(0, min(1, 0.5 + y_error + vy_error))
+        return thrust_output
+        
+    def gimbal_point(self, rocket_x, rocket_y, rocket_angle):
+        a = math.radians(rocket_angle)
+        return (
+            rocket_x - height / 2 * math.sin(a),
+            rocket_y + height / 2 * math.cos(a)
+        )
+
+    def corners(self, rocket_x, rocket_y, rocket_angle):
+        a = math.radians(rocket_angle + self.gimbal_angle)
+        hw = g_width / 2
+        gx, gy = self.gimbal_point(rocket_x, rocket_y, rocket_angle)
+        corners_local = [(-hw, 0), (hw, 0), (hw, g_height), (-hw, g_height)]
+        return [
+            (gx + px * math.cos(a) - py * math.sin(a),
+             gy + px * math.sin(a) + py * math.cos(a))
+            for px, py in corners_local
+        ]
+
+    def draw(self):
+        color = (255, 165, 0) if rocket.thrusting else (255, 0, 0)
+        if abs(self.error) > 0.2:
+             color = (255, 255, 0)  
+        pg.draw.polygon(screen, color, self.corners(rocket.x, rocket.y, rocket.body_angle))
+
+
+class Rocket:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.vx = 0
+        self.vy = 0
+        self.alpha = 0
+        self.omega = 0
+        self.max_thrust = 300
+        self.thrust = 0
+        self.thrusting = False
+        self.auto = True
+        self.body_angle = 0
+        self.engine = Engine()
+
+    def update(self, dt):
+        self.engine.update(dt)
+
+        if self.y >= HEIGHT or self.y <= 0:
+            self.y = 100
+            self.vy = 0
+            self.vx = 0
+            self.omega = 0
+            self.body_angle = 0
+
+        if self.x >= WIDTH or self.x <= 0:
+            self.x = WIDTH // 2
+            self.vx = 0
+            self.vy = 0
+            self.omega = 0
+            self.body_angle = 0
+
+        ax, ay = 0, 0
+
+        if self.auto:
+            thrust_output = self.engine.compute(self.body_angle, self.omega, self.vx, self.vy)
+            self.thrusting = thrust_output > 0.2
+            self.thrust = thrust_output * self.max_thrust
+            effective_thrust = self.thrust * math.cos(math.radians(self.engine.gimbal_angle))
+            Fx = effective_thrust * math.sin(math.radians(self.body_angle))
+            Fy = -effective_thrust * math.cos(math.radians(self.body_angle))
+            ax = Fx / mass
+            ay = Fy / mass
+
+            torque_thrust = -self.thrust * (height / 2) * math.sin(math.radians(self.engine.gimbal_angle))
+            torque_damping = -damping_constant * self.omega
+            torque = torque_thrust + torque_damping
+            I = (1/12) * mass * (height ** 2)
+            self.alpha = math.degrees(torque / I)
+            self.omega += self.alpha * dt
+            self.body_angle += self.omega * dt
+        else:
+            self.thrusting = False
+        self.vx += ax * dt
+        self.vy += (ay + g) * dt
+        self.x += self.vx * dt
+        self.y += self.vy * dt
+
+    def get_corners(self):
+        a = math.radians(self.body_angle)
+        w, h = width // 2, height // 2
+        corners = [(-w, -h), (w, -h), (w, h), (-w, h)]
+        return [
+            (self.x + px * math.cos(a) - py * math.sin(a),
+             self.y + px * math.sin(a) + py * math.cos(a))
+            for px, py in corners
+        ]
+
+    def draw(self):
+        pg.draw.polygon(screen, (0, 0, 0), self.get_corners())
+        self.engine.draw()
+
+
+rocket = Rocket(WIDTH // 2, 100)
+clock = pg.time.Clock()
+
+running = True
+while running:
+    dt = clock.tick(60) / 1000.0
+
+    for event in pg.event.get():
+        if event.type == pg.QUIT:
+            running = False
+
+        if event.type == pg.KEYDOWN:
+            if event.key == pg.K_SPACE:
+                rocket.thrusting = True
+            if event.key == pg.K_a:
+                rocket.auto = not rocket.auto
+                rocket.engine.gimbal_omega = 0
+            if event.key == pg.K_LEFT and not rocket.auto:
+                rocket.engine.gimbal_omega = +rocket.engine.max_gimbal_omega
+            if event.key == pg.K_RIGHT and not rocket.auto:
+                rocket.engine.gimbal_omega = -rocket.engine.max_gimbal_omega
+
+        if event.type == pg.KEYUP:
+            if event.key == pg.K_SPACE:
+                rocket.thrusting = False
+            if event.key in (pg.K_LEFT, pg.K_RIGHT) and not rocket.auto:
+                rocket.engine.gimbal_omega = 0
+
+    screen.fill((255, 255, 255))
+    rocket.update(dt)
+    rocket.draw()
+x    pg.display.flip()
+
+pg.quit()
