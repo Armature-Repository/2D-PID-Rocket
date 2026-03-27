@@ -21,22 +21,26 @@ class Engine:
         self.kp = 3.0
         self.kd = 1.5
         self.error = 0
+        self.constant_x = 0.01
+        self.constant_vx = 0.05
+        self.constant_y = 0.01
+        self.constant_vy = 0.05
 
     def update(self, dt):
         self.gimbal_angle += self.gimbal_omega * dt
         self.gimbal_angle = max(-self.max_gimbal_angle, min(self.max_gimbal_angle, self.gimbal_angle))
 
     def compute(self, body_angle, omega, vx, vy, xtarget, ytarget):
-        x_error = (rocket.x - xtarget) * 0.01
-        vx_error = vx * 0.05
+        x_error = (rocket.x - xtarget) * self.constant_x
+        vx_error = vx * self.constant_vx
         desired_lean = x_error + vx_error
         angle_error = body_angle + desired_lean
 
         correction = self.kp * angle_error + self.kd * omega
         self.gimbal_omega = max(-self.max_gimbal_omega, min(self.max_gimbal_omega, correction))
 
-        y_error = (rocket.y - ytarget) * 0.01
-        vy_error = vy * 0.05
+        y_error = (rocket.y - ytarget) * self.constant_y
+        vy_error = vy * self.constant_vy
         thrust_output = max(0, min(1, 0.5 + y_error + vy_error))
         return thrust_output
         
