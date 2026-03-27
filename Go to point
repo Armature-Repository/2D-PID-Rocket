@@ -18,13 +18,13 @@ class Engine:
         self.gimbal_omega = 0
         self.max_gimbal_omega = 40
         self.max_gimbal_angle = 15
-        self.kp = 3.0
-        self.kd = 1.5
+        self.kp = 6.16727
+        self.kd = 3.82010
         self.error = 0
-        self.constant_x = 0.01
-        self.constant_vx = 0.05
-        self.constant_y = 0.01
-        self.constant_vy = 0.05
+        self.constant_x = 0.12472
+        self.constant_vx = 0.34043
+        self.constant_y = 0.34638
+        self.constant_vy = 0.50000
 
     def update(self, dt):
         self.gimbal_angle += self.gimbal_omega * dt
