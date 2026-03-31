@@ -1,0 +1,317 @@
+import pygame as pg
+import math
+import pandas as pd
+import numpy as np
+import os
+
+pg.init()
+WIDTH, HEIGHT = 1500, 900
+width, height = 20, 50
+g_width, g_height = 10, 15
+
+
+g = 200
+damping_constant = 132.07584
+mass = 1
+
+os.chdir("C:\\Users\\lm0bh\\OneDrive\\Coding\\College\\Rocket")
+
+thrust_data = pd.read_csv("e12_thrust.csv")
+
+def get_thrust_and_mass(t):
+    if t >= thrust_data["time"].iloc[-1]:
+        return 0.0, 0.0
+    thrust = np.interp(t, thrust_data["time"], thrust_data["thrust"]) * 30
+    mass   = np.interp(t, thrust_data["time"], thrust_data["mass"]) * 30
+    return thrust, mass
+
+GROUND_LEVEL = HEIGHT - 50
+LAND_MARGIN = 5.45
+
+BURN_DURATION = float(thrust_data["time"].iloc[-1])
+TOTAL_IMPULSE = float(np.trapezoid(thrust_data["thrust"] * 30, thrust_data["time"]))
+AVG_THRUST    = TOTAL_IMPULSE / BURN_DURATION
+NET_DECEL     = AVG_THRUST / mass - g + 3
+MOTOR_DELTA_V = TOTAL_IMPULSE / mass
+
+
+screen = pg.display.set_mode((WIDTH, HEIGHT))
+
+class Engine:
+    def __init__(self):
+        self.gimbal_angle = 0
+        self.gimbal_omega = 0
+        self.max_gimbal_omega = 40
+        self.max_gimbal_angle = 15
+
+        self.kp = 19.75993
+        self.kd = 6.27366
+
+        self.error = 0
+
+        self.constant_x = 0.12472
+        self.constant_vx = 0.67214
+        self.constant_y = 0.05203
+        self.constant_vy = 1.98595
+
+        self.burn_time = 0
+
+    def ignite(self):
+        self.burn_time = 0
+
+    def update(self, dt):
+        self.gimbal_angle += self.gimbal_omega * dt
+        self.gimbal_angle = max(-self.max_gimbal_angle, min(self.max_gimbal_angle, self.gimbal_angle))
+
+    def compute(self, body_angle, omega, vx, vy, xtarget, ytarget):
+        x_error = (rocket.x - xtarget) * self.constant_x
+        vx_error = vx * self.constant_vx
+        desired_lean = x_error + vx_error
+        angle_error = body_angle + desired_lean
+
+        correction = self.kp * angle_error + self.kd * omega
+        self.gimbal_omega = max(-self.max_gimbal_omega, min(self.max_gimbal_omega, correction))
+
+        y_error = (rocket.y - ytarget) * self.constant_y
+        vy_error = vy * self.constant_vy
+        thrust_output = max(0, min(1, 0.5 + y_error + vy_error))
+
+    def compute_landing(self, body_angle, omega, vx, vy, y, ytarget):
+        """
+        Landing-specific guidance:
+            - Lateral: kill vx only (no x-position chasing)
+            - Vertical: drive y→ytarget and vy→0
+        """
+        vx_error     = vx * self.constant_vx
+        desired_lean = vx_error
+        angle_error  = body_angle + desired_lean
+
+        correction       = self.kp * angle_error + self.kd * omega
+        self.gimbal_omega = max(-self.max_gimbal_omega,
+                                min(self.max_gimbal_omega, correction))
+
+        y_error      = (y - ytarget) * self.constant_y
+        vy_error     = vy * self.constant_vy
+        thrust_output = max(0, min(1, 0.5 + y_error + vy_error))
+    
+    def gimbal_point(self, rocket_x, rocket_y, rocket_angle):
+        a = math.radians(rocket_angle)
+        return (
+            rocket_x - height / 2 * math.sin(a),
+            rocket_y + height / 2 * math.cos(a)
+        )
+
+    def corners(self, rocket_x, rocket_y, rocket_angle):
+        a = math.radians(rocket_angle + self.gimbal_angle)
+        hw = g_width / 2
+        gx, gy = self.gimbal_point(rocket_x, rocket_y, rocket_angle)
+        corners_local = [(-hw, 0), (hw, 0), (hw, g_height), (-hw, g_height)]
+        return [
+            (gx + px * math.cos(a) - py * math.sin(a),
+             gy + px * math.sin(a) + py * math.cos(a))
+            for px, py in corners_local
+        ]
+
+    def draw(self):
+        if self.burn_time <= BURN_DURATION:
+            color = (255, 165, 0) if rocket.thrusting else (255, 0, 0)
+            if abs(self.error) > 0.2:
+                color = (255, 255, 0)  
+            pg.draw.polygon(screen, color, self.corners(rocket.x, rocket.y, rocket.body_angle))
+
+
+class Rocket:
+    ON_PAD = "on_pad"
+    ASCENT = "ascent"
+    COAST = "coast"
+    LANDING = "landing"
+    LANDED = "landed"
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.vx = 0
+        self.vy = 0
+        self.alpha = 0
+        self.omega = 0
+        self.max_thrust = 300
+        self.thrust = 0
+        self.thrusting = False
+        self.body_angle = 0
+
+        self.engine_ascent = Engine()
+        self.engine_landing = Engine()
+        self.target = Target(WIDTH // 2, HEIGHT // 2 - height // 2)
+
+        self.phase = self.ON_PAD
+
+        self.constant_vx = 0.6
+        self.constant_y = 0.6
+        self.constant_vy = 0.4
+
+    def out_of_bounds(self):
+        return self.x < 0 or self.x > WIDTH or self.y < 0 or self.y > HEIGHT
+
+    def reset(self):
+        self.x = WIDTH // 2
+        self.y = HEIGHT - 50
+        self.vx = 0
+        self.vy = 0
+        self.alpha = 0
+        self.omega = 0
+        self.body_angle = 0
+        self.phase = self.ON_PAD
+        self.thrusting = False
+
+    def ignition_condition_met(self):
+        t_stop_y = min(self.vy / NET_DECEL, BURN_DURATION)
+        dist_needed = self.vy * t_stop_y - 0.5 * NET_DECEL * t_stop_y ** 2
+        altitude = (GROUND_LEVEL - LAND_MARGIN) - self.y
+        return altitude <= dist_needed
+
+    def status(self):
+        if self.body_angle > 15 or self.body_angle < -15:
+            return False
+        vx_error = abs(self.vx) * self.constant_vx
+        y_error = abs(self.y - (GROUND_LEVEL - LAND_MARGIN)) * self.constant_y
+        vy_error = abs(self.vy) * self.constant_vy
+        error = sum([vx_error, y_error, vy_error])
+        print(error, vx_error, y_error, vy_error)
+        
+        return error < 100
+
+    def launch(self):
+        if self.phase == self.ON_PAD:
+            self.phase = self.ASCENT
+            self.engine_ascent.ignite()
+            self.thrusting = True
+
+    def update(self, dt):
+
+        if self.phase == self.ASCENT:
+            self.engine_ascent.update(dt)
+        elif self.phase == self.LANDING:
+            self.engine_landing.update(dt)
+
+        if self.out_of_bounds():
+            self.reset()
+
+        if self.phase == self.ON_PAD:
+            return
+
+        if self.phase == self.ASCENT:
+            self.engine_ascent.burn_time += dt
+            self.thrust, _ = get_thrust_and_mass(self.engine_ascent.burn_time)
+            self.engine_ascent.compute(self.body_angle, self.omega, self.vx, self.vy, self.target.x, self.target.y)
+            if self.engine_ascent.burn_time >= BURN_DURATION:
+                self.phase = self.COAST
+                self.thrusting = False
+            self.engine_ascent.compute(self.body_angle, self.omega, self.vx, self.vy, self.target.x, self.target.y)
+
+        elif self.phase == self.COAST:
+            if self.ignition_condition_met():
+                self.phase = self.LANDING
+                self.engine_landing.ignite()
+                self.thrusting = True
+        
+        elif self.phase == self.LANDING:
+            self.engine_landing.burn_time += dt
+            self.thrust, _ = get_thrust_and_mass(self.engine_landing.burn_time)
+            self.engine_landing.compute(self.body_angle, self.omega, self.vx, self.vy, self.target.x, self.target.y)
+            if self.engine_landing.burn_time >= BURN_DURATION:
+                self.phase = self.LANDED
+                self.thrusting = False
+                status = self.status()
+                if status:
+                    print("Successful landing!")
+                else:
+                    print("Hard landing.")
+            self.engine_landing.compute_landing(self.body_angle, self.omega, self.vx, self.vy, self.y, GROUND_LEVEL - LAND_MARGIN)
+
+        ax, ay = 0, 0
+
+        active_engine = self.engine_landing if self.phase == self.LANDING else self.engine_ascent
+
+        effective_thrust = self.thrust * math.cos(math.radians(active_engine.gimbal_angle))
+        Fx = effective_thrust * math.sin(math.radians(self.body_angle))
+        Fy = -effective_thrust * math.cos(math.radians(self.body_angle))
+        ax = Fx / mass
+        ay = Fy / mass
+
+        torque_thrust = -self.thrust * (height / 2) * math.sin(math.radians(active_engine.gimbal_angle))
+        torque_damping = -damping_constant * self.omega
+        torque = torque_thrust + torque_damping
+        I = (1/12) * mass * (height ** 2)
+        self.alpha = math.degrees(torque / I)
+        self.omega += self.alpha * dt
+        self.body_angle += self.omega * dt
+        
+        self.vx += ax * dt
+        self.vy += (ay + g) * dt
+        self.x += self.vx * dt
+        self.y += self.vy * dt
+
+    def get_corners(self):
+        a = math.radians(self.body_angle)
+        w, h = width // 2, height // 2
+        corners = [(-w, -h), (w, -h), (w, h), (-w, h)]
+        return [
+            (self.x + px * math.cos(a) - py * math.sin(a),
+             self.y + px * math.sin(a) + py * math.cos(a))
+            for px, py in corners
+        ]
+
+    def draw(self):
+        pg.draw.polygon(screen, (0, 0, 0), self.get_corners())
+        self.engine_ascent.draw()
+        self.engine_landing.draw()
+        self.target.draw()
+
+class Target():
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def draw(self):
+        pg.draw.circle(screen, (0, 255, 255), (int(self.x), int(self.y)), 10)
+
+class Background:
+    def __init__(self):
+        self.ground_level = HEIGHT - 50
+        self.ground_color = (40, 220, 90)
+
+    def draw(self):
+        pg.draw.rect(screen, self.ground_color, (0, self.ground_level, WIDTH, HEIGHT - self.ground_level))
+
+rocket = Rocket(WIDTH // 2, HEIGHT - 50)
+clock = pg.time.Clock()
+background = Background()
+
+running = True
+while running:
+    dt = clock.tick(60) / 1000.0
+
+    keys = pg.key.get_pressed()
+    if keys[pg.K_LEFT]:
+        rocket.target.x -= 3
+    if keys[pg.K_RIGHT]:
+        rocket.target.x += 3
+    if keys[pg.K_UP]:
+        rocket.target.y -= 3
+    if keys[pg.K_DOWN]:
+        rocket.target.y += 3
+
+    for event in pg.event.get():
+        if event.type == pg.QUIT:
+            running = False
+        
+        if event.type == pg.KEYDOWN:
+            if event.key == pg.K_SPACE:
+                rocket.launch()
+
+    screen.fill((255, 255, 255))
+    rocket.update(dt)
+    rocket.draw()
+    background.draw()
+    pg.display.flip()
+
+pg.quit()
